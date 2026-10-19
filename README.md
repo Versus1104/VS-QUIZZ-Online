@@ -1,8 +1,20 @@
-# VS_QUIZZ v31 Online
+# VS_QUIZZ Online v32.0.1
 
-1. Înlocuiește fișierele din repository-ul GitHub cu cele din acest pachet.
-2. Păstrează serviciul Render existent `vs-quizz-online`; nu crea unul nou.
-3. Commit și deploy latest commit în Render.
-4. Deschide jocul cu Ctrl+F5 și creează o cameră nouă.
+This package contains the VS_QUIZZ v32 HTML game and a simplified Node.js WebSocket server.
 
-v31 adaugă tabla comună la jucători, clasament și inventarul power-up-urilor, propuneri de întrebări cu acceptarea gazdei, notificări pentru roată și efecte speciale.
+## Files
+- `VS_QUIZZ_v32.html` — game interface
+- `server.js` — HTTP and WebSocket server
+- `package.json` — pinned `ws` dependency and start script
+- `render.yaml` — Render service configuration
+
+## Local test
+1. Install Node.js 20 or newer.
+2. In this folder, run `npm install`.
+3. Run `npm start`.
+4. Open `http://localhost:3000` and verify `http://localhost:3000/health` returns `{"ok":true,"rooms":0}`.
+
+## Existing Render deployment
+Update the corresponding files in the existing `VS-QUIZZ-Online` GitHub repository only after reviewing them. Then deploy the latest commit in the existing Render service `vs-quizz-online`. Do not delete or recreate the existing service.
+
+This package has undergone static checks only; it has not been scanned with Microsoft Defender on the target Windows PC or tested in a live Render multiplayer session.

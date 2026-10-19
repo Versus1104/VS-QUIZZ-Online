@@ -1,58 +1,234 @@
+'use strict';
+
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const WebSocket = require('ws');
-const PORT = process.env.PORT || 3000;
-const ROOT = __dirname;
+
+const PORT = Number(process.env.PORT) || 3000;
+const GAME_FILE = path.join(__dirname, 'VS_QUIZZ_v32.html');
+const MAX_PAYLOAD = 16 * 1024;
+const MAX_PLAYERS = 20;
 const rooms = new Map();
-const server = http.createServer((req,res)=>{
-  const pathname = new URL(req.url, 'http://localhost').pathname;
-  if(pathname === '/health'){res.writeHead(200,{'content-type':'application/json'});return res.end(JSON.stringify({ok:true,rooms:rooms.size}));}
-  let file = pathname === '/' ? 'VS_QUIZZ_v31.html' : path.basename(decodeURIComponent(pathname));
-  if(file !== 'VS_QUIZZ_v31.html'){res.writeHead(404);return res.end('Not found');}
-  fs.readFile(path.join(ROOT,file),(err,data)=>{if(err){res.writeHead(500);return res.end('Could not load game file');}res.writeHead(200,{'content-type':'text/html; charset=utf-8','cache-control':'no-store'});res.end(data);});
+
+function send(socket, message) {
+  if (socket && socket.readyState === WebSocket.OPEN) {
+    socket.send(JSON.stringify(message));
+  }
+}
+
+function broadcast(room, message, excludedSocket = null) {
+  for (const client of room.clients) {
+    if (client !== excludedSocket) send(client, message);
+  }
+}
+
+function getPeers(room) {
+  return Array.from(room.players.values(), player => ({ id: player.id, name: player.name }));
+}
+
+function makeRoomCode() {
+  const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  let code;
+  do {
+    const bytes = crypto.randomBytes(6);
+    code = Array.from(bytes, byte => alphabet[byte % alphabet.length]).join('');
+  } while (rooms.has(code));
+  return code;
+}
+
+const server = http.createServer((request, response) => {
+  // Only serve the game at / and a small health endpoint. No user-supplied file paths.
+  const pathname = String(request.url || '/').split('?')[0];
+  if (pathname === '/health') {
+    response.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
+    response.end(JSON.stringify({ ok: true, rooms: rooms.size }));
+    return;
+  }
+  if (pathname !== '/') {
+    response.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' });
+    response.end('Not found');
+    return;
+  }
+  fs.readFile(GAME_FILE, (error, data) => {
+    if (error) {
+      response.writeHead(500, { 'content-type': 'text/plain; charset=utf-8' });
+      response.end('Could not load game file');
+      return;
+    }
+    response.writeHead(200, {
+      'content-type': 'text/html; charset=utf-8',
+      'cache-control': 'no-store',
+      'x-content-type-options': 'nosniff'
+    });
+    response.end(data);
+  });
 });
-const wss = new WebSocket.Server({server,path:'/ws',maxPayload:16*1024});
-function send(ws,obj){if(ws&&ws.readyState===WebSocket.OPEN)ws.send(JSON.stringify(obj));}
-function broadcast(room,obj,except=null){for(const ws of room.clients){if(ws!==except)send(ws,obj);}}
-function peers(room){return [...room.players.values()].map(p=>({id:p.id,name:p.name}));}
-function newCode(){let code;do{code=crypto.randomBytes(3).toString('hex').toUpperCase().replace(/[0-9]/g,'').slice(0,4)+crypto.randomBytes(2).toString('hex').toUpperCase().slice(0,2);}while(rooms.has(code));return code;}
-wss.on('connection',ws=>{
-  ws.id=crypto.randomUUID();ws.room=null;ws.role=null;ws.name=null;ws.isAlive=true;
-  ws.on('pong',()=>ws.isAlive=true);
-  ws.on('message',raw=>{let m;try{m=JSON.parse(raw.toString())}catch{return;}if(!m||typeof m.type!=='string')return;
-    if(m.type==='create-room'){
-      if(ws.room&&rooms.has(ws.room))return send(ws,{type:'error',message:'Deja ești într-o cameră.'});
-      const code=newCode();const room={code,host:ws,players:new Map(),clients:new Set([ws]),question:null,buzzed:false,started:false};rooms.set(code,room);ws.room=code;ws.role='host';send(ws,{type:'room-created',room:code});return;
+
+const websocketServer = new WebSocket.Server({ server, path: '/ws', maxPayload: MAX_PAYLOAD });
+
+websocketServer.on('connection', socket => {
+  socket.id = crypto.randomUUID();
+  socket.roomCode = null;
+  socket.role = null;
+  socket.playerName = null;
+  socket.alive = true;
+
+  socket.on('pong', () => { socket.alive = true; });
+  socket.on('message', raw => {
+    let message;
+    try {
+      message = JSON.parse(raw.toString());
+    } catch {
+      return;
     }
-    if(m.type==='join-room'){
-      const code=String(m.room||'').toUpperCase().replace(/[^A-Z0-9]/g,'').slice(0,6);const name=String(m.name||'').trim().slice(0,24);
-      const room=rooms.get(code);if(!room)return send(ws,{type:'error',message:'Camera nu există sau gazda nu este conectată.'});if(!name)return send(ws,{type:'error',message:'Introdu un nume valid.'});if(room.players.size>=20)return send(ws,{type:'error',message:'Camera este plină (maximum 20 jucători online).'});
-      if([...room.players.values()].some(p=>p.name.toLowerCase()===name.toLowerCase()))return send(ws,{type:'error',message:'Numele este deja folosit în această cameră.'});
-      ws.room=code;ws.role='player';ws.name=name;room.clients.add(ws);room.players.set(ws.id,{id:ws.id,name,ws});send(ws,{type:'joined',room:code,name});send(room.host,{type:'player-joined',name,count:room.players.size});send(room.host,{type:'peers',players:peers(room)});return;
+    if (!message || typeof message.type !== 'string') return;
+
+    if (message.type === 'create-room') {
+      if (socket.roomCode && rooms.has(socket.roomCode)) {
+        send(socket, { type: 'error', message: 'Deja ești într-o cameră.' });
+        return;
+      }
+      const code = makeRoomCode();
+      const room = {
+        code,
+        host: socket,
+        players: new Map(),
+        clients: new Set([socket]),
+        question: null,
+        boardState: null,
+        buzzed: false,
+        started: false
+      };
+      rooms.set(code, room);
+      socket.roomCode = code;
+      socket.role = 'host';
+      send(socket, { type: 'room-created', room: code });
+      return;
     }
-    const room=rooms.get(ws.room);if(!room)return;
-    if(m.type==='buzz'&&ws.role==='player'){
-      if(!room.question||room.buzzed)return;room.buzzed=true;const player=room.players.get(ws.id);if(!player)return;
-      // Server-side first-buzz lock: only the first valid message wins.
-      broadcast(room,{type:'buzz-locked',id:ws.id,name:player.name});return;
+
+    if (message.type === 'join-room') {
+      const code = String(message.room || '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 6);
+      const name = String(message.name || '').trim().slice(0, 24);
+      const room = rooms.get(code);
+      if (!room) return send(socket, { type: 'error', message: 'Camera nu există sau gazda nu este conectată.' });
+      if (!name) return send(socket, { type: 'error', message: 'Introdu un nume valid.' });
+      if (room.players.size >= MAX_PLAYERS) return send(socket, { type: 'error', message: 'Camera este plină (maximum 20 jucători online).' });
+      if (Array.from(room.players.values()).some(player => player.name.toLowerCase() === name.toLowerCase())) {
+        return send(socket, { type: 'error', message: 'Numele este deja folosit în această cameră.' });
+      }
+      socket.roomCode = code;
+      socket.role = 'player';
+      socket.playerName = name;
+      room.clients.add(socket);
+      room.players.set(socket.id, { id: socket.id, name, socket });
+      send(socket, { type: 'joined', room: code, name });
+      // Give late joiners the latest shared board and any currently open question.
+      if (room.boardState) send(socket, room.boardState);
+      if (room.question) send(socket, room.question);
+      send(room.host, { type: 'player-joined', name, count: room.players.size });
+      send(room.host, { type: 'peers', players: getPeers(room) });
+      return;
     }
-    if(m.type==='suggest-tile'&&ws.role==='player'&&m.room===room.code){
-      const player=room.players.get(ws.id);if(!player||!room.started)return;
-      const suggestion={type:'suggestion',player:player.name,key:String(m.key||'').slice(0,60),round:Number(m.round),ci:Number(m.ci),q:Number(m.q),category:String(m.category||'').slice(0,100),value:Number(m.value)||0};
-      send(room.host,suggestion);return;
+
+    const room = rooms.get(socket.roomCode);
+    if (!room) return;
+
+    if (message.type === 'buzz' && socket.role === 'player') {
+      if (!room.question || room.buzzed) return;
+      room.buzzed = true;
+      const player = room.players.get(socket.id);
+      if (!player) return;
+      broadcast(room, { type: 'buzz-locked', id: socket.id, name: player.name });
+      return;
     }
-    if(ws.role==='host'&&m.room===room.code){
-      if(m.type==='question'){room.question={category:String(m.category||'').slice(0,100),value:Number(m.value)||0,question:String(m.question||'').slice(0,2000)};room.buzzed=false;room.started=true;broadcast(room,{...m,type:'question'});}
-      else if(m.type==='question-closed'){room.question=null;room.buzzed=false;broadcast(room,m);}
-      else if(m.type==='game-started'){room.started=true;broadcast(room,m);}
-      else if(['answer-result','scores','game-ended','board-state','suggestion-result','wheel-spin-start','wheel-spin-result','special-event'].includes(m.type)){broadcast(room,m);}
-      else if(m.type==='host-close'){broadcast(room,{type:'error',message:'Gazda a închis camera.'});for(const client of room.clients){try{client.close()}catch{}}rooms.delete(room.code);}
+
+    if (message.type === 'suggest-tile' && socket.role === 'player' && message.room === room.code) {
+      const player = room.players.get(socket.id);
+      if (!player || !room.started) return;
+      send(room.host, {
+        type: 'suggestion',
+        player: player.name,
+        key: String(message.key || '').slice(0, 60),
+        round: Number(message.round),
+        ci: Number(message.ci),
+        q: Number(message.q),
+        category: String(message.category || '').slice(0, 100),
+        value: Number(message.value) || 0
+      });
+      return;
+    }
+
+    if (socket.role !== 'host' || message.room !== room.code) return;
+
+    if (message.type === 'question') {
+      room.question = {
+        ...message,
+        type: 'question',
+        category: String(message.category || '').slice(0, 100),
+        value: Number(message.value) || 0,
+        question: String(message.question || '').slice(0, 2000)
+      };
+      room.buzzed = false;
+      room.started = true;
+      broadcast(room, { ...message, type: 'question' });
+    } else if (message.type === 'question-closed') {
+      room.question = null;
+      room.buzzed = false;
+      broadcast(room, message);
+    } else if (message.type === 'game-started') {
+      room.started = true;
+      broadcast(room, message);
+    } else if (message.type === 'board-state') {
+      room.boardState = message;
+      broadcast(room, message);
+    } else if ([
+      'answer-result', 'scores', 'game-ended', 'suggestion-result',
+      'wheel-spin-start', 'wheel-spin-result', 'special-event'
+    ].includes(message.type)) {
+      broadcast(room, message);
+    } else if (message.type === 'host-close') {
+      broadcast(room, { type: 'error', message: 'Gazda a închis camera.' });
+      for (const client of room.clients) {
+        try { client.close(); } catch { /* ignore a closed connection */ }
+      }
+      rooms.delete(room.code);
     }
   });
-  ws.on('close',()=>{const code=ws.room;if(!code)return;const room=rooms.get(code);if(!room)return;room.clients.delete(ws);if(ws.role==='player'){room.players.delete(ws.id);send(room.host,{type:'peers',players:peers(room)});send(room.host,{type:'player-left',name:ws.name,count:room.players.size});}else if(ws.role==='host'){for(const client of room.clients)send(client,{type:'error',message:'Gazda s-a deconectat. Camera s-a închis.'});for(const client of room.clients){try{client.close()}catch{}}rooms.delete(code);}});
+
+  socket.on('close', () => {
+    const code = socket.roomCode;
+    if (!code) return;
+    const room = rooms.get(code);
+    if (!room) return;
+    room.clients.delete(socket);
+    if (socket.role === 'player') {
+      room.players.delete(socket.id);
+      send(room.host, { type: 'peers', players: getPeers(room) });
+      send(room.host, { type: 'player-left', name: socket.playerName, count: room.players.size });
+    } else if (socket.role === 'host') {
+      for (const client of room.clients) {
+        send(client, { type: 'error', message: 'Gazda s-a deconectat. Camera s-a închis.' });
+        try { client.close(); } catch { /* ignore a closed connection */ }
+      }
+      rooms.delete(code);
+    }
+  });
 });
-const heartbeat=setInterval(()=>{for(const ws of wss.clients){if(ws.isAlive===false){ws.terminate();continue;}ws.isAlive=false;ws.ping();}},30000);
-wss.on('close',()=>clearInterval(heartbeat));
-server.listen(PORT,'0.0.0.0',()=>console.log(`VS_QUIZZ v31 online listening on ${PORT}`));
+
+const heartbeat = setInterval(() => {
+  for (const socket of websocketServer.clients) {
+    if (socket.alive === false) {
+      socket.terminate();
+      continue;
+    }
+    socket.alive = false;
+    socket.ping();
+  }
+}, 30000);
+
+websocketServer.on('close', () => clearInterval(heartbeat));
+server.listen(PORT, '0.0.0.0', () => {
+  console.log(`VS_QUIZZ v32 online server listening on port ${PORT}`);
+});

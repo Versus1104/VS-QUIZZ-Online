@@ -9,8 +9,8 @@ const rooms = new Map();
 const server = http.createServer((req,res)=>{
   const pathname = new URL(req.url, 'http://localhost').pathname;
   if(pathname === '/health'){res.writeHead(200,{'content-type':'application/json'});return res.end(JSON.stringify({ok:true,rooms:rooms.size}));}
-  let file = pathname === '/' ? 'VS_QUIZZ_v29.html' : path.basename(decodeURIComponent(pathname));
-  if(file !== 'VS_QUIZZ_v29.html'){res.writeHead(404);return res.end('Not found');}
+  let file = pathname === '/' ? 'VS_QUIZZ_v30.html' : path.basename(decodeURIComponent(pathname));
+  if(file !== 'VS_QUIZZ_v30.html'){res.writeHead(404);return res.end('Not found');}
   fs.readFile(path.join(ROOT,file),(err,data)=>{if(err){res.writeHead(500);return res.end('Could not load game file');}res.writeHead(200,{'content-type':'text/html; charset=utf-8','cache-control':'no-store'});res.end(data);});
 });
 const wss = new WebSocket.Server({server,path:'/ws',maxPayload:16*1024});
@@ -49,4 +49,4 @@ wss.on('connection',ws=>{
 });
 const heartbeat=setInterval(()=>{for(const ws of wss.clients){if(ws.isAlive===false){ws.terminate();continue;}ws.isAlive=false;ws.ping();}},30000);
 wss.on('close',()=>clearInterval(heartbeat));
-server.listen(PORT,'0.0.0.0',()=>console.log(`VS_QUIZZ v29 online listening on ${PORT}`));
+server.listen(PORT,'0.0.0.0',()=>console.log(`VS_QUIZZ v30 online listening on ${PORT}`));

@@ -1624,8 +1624,28 @@ function onlineDisconnect(){if(VSQ_ONLINE.ws)VSQ_ONLINE.ws.send(JSON.stringify({
 function onlineLeavePlayer(){if(VSQ_ONLINE.ws)VSQ_ONLINE.ws.close();location.href=location.pathname;}
 function onlineBroadcast(obj){if(VSQ_ONLINE.role==='host'&&VSQ_ONLINE.ws&&VSQ_ONLINE.ws.readyState===1&&VSQ_ONLINE.room)VSQ_ONLINE.ws.send(JSON.stringify({...obj,room:VSQ_ONLINE.room}));}
 function onlineSendQuestion(){if(VSQ_ONLINE.role!=='host'||!current)return;const item=categories[current.ci].qs[current.qi];onlineBroadcast({type:'question',category:categories[current.ci][lang==='ru'?'ru':'ro'],value:current.value,question:item[lang==='ru'?0:1]});}
-// Add connected remote players to the existing local game without replacing its game engine.
-const vsqStartGameOriginal=startGame;startGame=function(){vsqStartGameOriginal();if(VSQ_ONLINE.role==='host'&&VSQ_ONLINE.peers.length){const existing=new Set(players.map(x=>x.toLowerCase()));VSQ_ONLINE.remote=[];for(const p of VSQ_ONLINE.peers){if(existing.has(p.name.toLowerCase()))continue;const idx=players.length;players.push(p.name);scores.push(0);playerStats.push({correct:0,wrong:0,streak:0,bestStreak:0});powerInventory.push({boost:1,shield:1,steal:1});VSQ_ONLINE.remote.push({id:p.id,name:p.name,index:idx});existing.add(p.name.toLowerCase());}renderGame();onlineBroadcast({type:'game-started'});onlineBroadcast({type:'scores',players:players.map((name,i)=>({name,score:scores[i]}))});onlineStatus('Joc pornit. Jucători online sunt incluși în clasament.');}};
+// Online host: use the connected remote players as the actual contestants before starting.
+// The original setup only offers 2-3 local players, so extend it dynamically for online rooms.
+const vsqStartGameOriginal=startGame;
+startGame=function(){
+  if(VSQ_ONLINE.role==='host'){
+    const connected=VSQ_ONLINE.peers||[];
+    if(connected.length<2){onlineStatus('Pentru a porni partida online, conectează cel puțin 2 jucători.');alert('Conectează cel puțin 2 jucători online înainte de a începe partida.');return;}
+    const sel=$('playerCount');
+    for(let n=1;n<=20;n++){if(![...sel.options].some(o=>Number(o.value)===n)){const opt=document.createElement('option');opt.value=String(n);opt.textContent=n+' jucători online';sel.appendChild(opt);}}
+    sel.value=String(connected.length);
+    renderNameFields();
+    connected.forEach((p,i)=>{const field=$('pname'+i);if(field)field.value=p.name;});
+    vsqStartGameOriginal();
+    if($('game').classList.contains('hidden'))return;
+    VSQ_ONLINE.remote=connected.map((p,index)=>({id:p.id,name:p.name,index}));
+    onlineBroadcast({type:'game-started'});
+    onlineBroadcast({type:'scores',players:players.map((name,i)=>({name,score:scores[i]}))});
+    onlineStatus('Joc pornit cu '+players.length+' jucători online.');
+    return;
+  }
+  vsqStartGameOriginal();
+};
 const vsqOpenQuestionOriginal=openQuestion;openQuestion=function(ci,q,key){vsqOpenQuestionOriginal(ci,q,key);if(current&&current.special!=='secret'&&VSQ_ONLINE.role==='host')onlineSendQuestion();};
 const vsqRevealSecretOriginal=revealSecretQuestion;revealSecretQuestion=function(){vsqRevealSecretOriginal();if(current&&VSQ_ONLINE.role==='host')onlineSendQuestion();};
 const vsqAwardOriginal=award;award=function(correct){if(!current){vsqAwardOriginal(correct);return;}const item=categories[current.ci].qs[current.qi];const answer=item[lang==='ru'?2:3];const playerIndex=current.special==='secret'?+$('targetPlayer').value:current.special==='risk'?+$('chooserPlayer').value:+$('awardPlayer').value;const player=players[playerIndex]||'Jucător';const points=current.value;vsqAwardOriginal(correct);if(VSQ_ONLINE.role==='host'){onlineBroadcast({type:'answer-result',correct,answer,player,points});onlineBroadcast({type:'scores',players:players.map((name,i)=>({name,score:scores[i]}))});document.getElementById('onlineHostBuzz').classList.add('hidden');}};

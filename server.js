@@ -9,8 +9,8 @@ const rooms = new Map();
 const server = http.createServer((req,res)=>{
   const pathname = new URL(req.url, 'http://localhost').pathname;
   if(pathname === '/health'){res.writeHead(200,{'content-type':'application/json'});return res.end(JSON.stringify({ok:true,rooms:rooms.size}));}
-  let file = pathname === '/' ? 'VS_QUIZZ_v30.html' : path.basename(decodeURIComponent(pathname));
-  if(file !== 'VS_QUIZZ_v30.html'){res.writeHead(404);return res.end('Not found');}
+  let file = pathname === '/' ? 'VS_QUIZZ_v31.html' : path.basename(decodeURIComponent(pathname));
+  if(file !== 'VS_QUIZZ_v31.html'){res.writeHead(404);return res.end('Not found');}
   fs.readFile(path.join(ROOT,file),(err,data)=>{if(err){res.writeHead(500);return res.end('Could not load game file');}res.writeHead(200,{'content-type':'text/html; charset=utf-8','cache-control':'no-store'});res.end(data);});
 });
 const wss = new WebSocket.Server({server,path:'/ws',maxPayload:16*1024});
@@ -38,10 +38,16 @@ wss.on('connection',ws=>{
       // Server-side first-buzz lock: only the first valid message wins.
       broadcast(room,{type:'buzz-locked',id:ws.id,name:player.name});return;
     }
+    if(m.type==='suggest-tile'&&ws.role==='player'&&m.room===room.code){
+      const player=room.players.get(ws.id);if(!player||!room.started)return;
+      const suggestion={type:'suggestion',player:player.name,key:String(m.key||'').slice(0,60),round:Number(m.round),ci:Number(m.ci),q:Number(m.q),category:String(m.category||'').slice(0,100),value:Number(m.value)||0};
+      send(room.host,suggestion);return;
+    }
     if(ws.role==='host'&&m.room===room.code){
-      if(m.type==='question'){room.question={category:String(m.category||'').slice(0,100),value:Number(m.value)||0,question:String(m.question||'').slice(0,2000)};room.buzzed=false;broadcast(room,{...m,type:'question'});}
+      if(m.type==='question'){room.question={category:String(m.category||'').slice(0,100),value:Number(m.value)||0,question:String(m.question||'').slice(0,2000)};room.buzzed=false;room.started=true;broadcast(room,{...m,type:'question'});}
       else if(m.type==='question-closed'){room.question=null;room.buzzed=false;broadcast(room,m);}
-      else if(m.type==='game-started'||m.type==='answer-result'||m.type==='scores'||m.type==='game-ended'){broadcast(room,m);}
+      else if(m.type==='game-started'){room.started=true;broadcast(room,m);}
+      else if(['answer-result','scores','game-ended','board-state','suggestion-result','wheel-spin-start','wheel-spin-result','special-event'].includes(m.type)){broadcast(room,m);}
       else if(m.type==='host-close'){broadcast(room,{type:'error',message:'Gazda a închis camera.'});for(const client of room.clients){try{client.close()}catch{}}rooms.delete(room.code);}
     }
   });
@@ -49,4 +55,4 @@ wss.on('connection',ws=>{
 });
 const heartbeat=setInterval(()=>{for(const ws of wss.clients){if(ws.isAlive===false){ws.terminate();continue;}ws.isAlive=false;ws.ping();}},30000);
 wss.on('close',()=>clearInterval(heartbeat));
-server.listen(PORT,'0.0.0.0',()=>console.log(`VS_QUIZZ v30 online listening on ${PORT}`));
+server.listen(PORT,'0.0.0.0',()=>console.log(`VS_QUIZZ v31 online listening on ${PORT}`));

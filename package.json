@@ -1,6 +1,6 @@
 {
   "name": "vs-quizz-online",
-  "version": "30.0.0",
+  "version": "31.0.0",
   "private": true,
   "description": "VS_QUIZZ online multiplayer server",
   "main": "server.js",
